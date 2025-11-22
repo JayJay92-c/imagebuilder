@@ -36,17 +36,23 @@ jobs:
           mkdir -p build/rootfs-min
           mkdir -p build/image
 
-      - name: Create Debian rootfs
-        id: create_rootfs
-        run: |
-          set -e
-          if sudo debootstrap --arch=arm64 bookworm build/rootfs http://deb.debian.org/debian; then
-            echo "Rootfs created successfully."
-            echo "rootfs_status=success" >> $GITHUB_ENV
-          else
-            echo "Rootfs creation failed. Will use fallback."
-            echo "rootfs_status=fallback" >> $GITHUB_ENV
-          fi
+   - name: Create Debian rootfs
+  id: create_rootfs
+  run: |
+    set -e
+    echo "Starting rootfs creation..."
+    # Guardamos salida y error en un archivo temporal
+    sudo debootstrap --arch=arm64 bookworm build/rootfs http://deb.debian.org/debian > rootfs.log 2>&1 || true
+    # Revisamos si hubo error
+    if [ $? -eq 0 ]; then
+      echo "Rootfs created successfully."
+      echo "rootfs_status=success" >> $GITHUB_ENV
+    else
+      echo "Rootfs creation failed. Showing error log:"
+      cat rootfs.log
+      echo "rootfs_status=fallback" >> $GITHUB_ENV
+    fi
+
 
       - name: Configure chroot environment
         if: env.rootfs_status == 'success'
