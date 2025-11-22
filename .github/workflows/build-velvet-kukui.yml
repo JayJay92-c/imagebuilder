@@ -40,7 +40,6 @@ jobs:
         id: create_rootfs
         run: |
           echo "Starting rootfs creation..."
-          # Captura de salida y error
           sudo debootstrap --arch=arm64 bookworm build/rootfs http://deb.debian.org/debian > rootfs.log 2>&1 || true
           if [ $? -eq 0 ]; then
             echo "Rootfs created successfully."
@@ -73,11 +72,16 @@ jobs:
 
       - name: Package rootfs into tarball
         run: |
+          echo "Packaging rootfs..."
           if [ -d build/rootfs ]; then
             sudo tar -C build/rootfs -czf build/velvet-kukui-rootfs.tar.gz .
-          else
+          elif [ -d build/rootfs-min ]; then
             sudo tar -C build/rootfs-min -czf build/velvet-kukui-rootfs.tar.gz .
+          else
+            echo "No rootfs found! Exiting."
+            exit 1
           fi
+          echo "Packaging complete."
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
