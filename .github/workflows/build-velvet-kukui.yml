@@ -1,0 +1,86 @@
+name: Build VelvetOS (kukui / kappa)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_velvet:
+    runs-on: ubuntu-latest
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TARGET_BOARD: kukui
+      TARGET_VARIANT: kappa
+      BUILD_DIR: velvet_build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install packages
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            qemu-user-static binfmt-support debootstrap \
+            build-essential git wget curl xz-utils \
+            python3 python3-pip rsync pv \
+            device-tree-compiler libssl-dev bc bison flex \
+            kmod e2fsprogs parted dosfstools gdisk squashfs-tools
+
+      - name: Prepare build dir
+        run: |
+          rm -rf $BUILD_DIR || true
+          mkdir -p $BUILD_DIR
+          cp -a . $BUILD_DIR
+          ls -la $BUILD_DIR
+
+      - name: Make known build scripts executable
+        run: |
+          chmod +x $BUILD_DIR/build-image.sh || true
+          chmod +x $BUILD_DIR/scripts/build-image.sh || true
+          chmod +x $BUILD_DIR/systems/chromebook_kukui/build-image.sh || true
+          chmod +x $BUILD_DIR/tests/build-image.sh || true
+
+      - name: Try repo's build-image scripts (in order)
+        working-directory: $BUILD_DIR
+        run: |
+          set -eux
+          # try a few likely script locations/args; continue on failure but capture logs
+          ./build-image.sh ${TARGET_BOARD} ${TARGET_VARIANT} 2>&1 | tee build-run-1.log || true
+          if [ -x ./scripts/build-image.sh ]; then
+            ./scripts/build-image.sh ${TARGET_BOARD} ${TARGET_VARIANT} 2>&1 | tee build-run-2.log || true
+          fi
+          if [ -x ./systems/chromebook_kukui/build-image.sh ]; then
+            ./systems/chromebook_kukui/build-image.sh ${TARGET_VARIANT} 2>&1 | tee build-run-3.log || true
+          fi
+          if [ -x ./tests/build-image.sh ]; then
+            ./tests/build-image.sh ${TARGET_BOARD} ${TARGET_VARIANT} 2>&1 | tee build-run-4.log || true
+          fi
+
+      - name: Fallback: create minimal Debian rootfs (if image not produced)
+        if: always()
+        working-directory: $BUILD_DIR
+        run: |
+          set -eux
+          # if no images exist, build a minimal rootfs tarball as fallback
+          mkdir -p fallback
+          if ! ls *.img 1> /dev/null 2>&1; then
+            sudo debootstrap --arch=arm64 --variant=minbase bookworm rootfs http://deb.debian.org/debian || true
+            sudo tar -C rootfs -cJf fallback/velvet-rootfs-bookworm-arm64.tar.xz || true
+          fi
+          ls -la
+
+      - name: Collect artifacts
+        working-directory: $BUILD_DIR
+        run: |
+          mkdir -p out
+          # collect images and logs
+          find . -maxdepth 4 -type f \( -name "*.img" -o -name "*.img.gz" -o -name "*.img.xz" -o -name "*.img.zst" -o -name "build-run-*.log" -o -name "*.tar.xz" \) -exec cp -v {} out/ \; || true
+          ls -la out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: velvet-kukui-build
+          path: out/
