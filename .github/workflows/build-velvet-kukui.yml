@@ -71,12 +71,17 @@ jobs:
           fi
           ls -la
 
-      - name: Collect artifacts
+           - name: Collect artifacts
         working-directory: $BUILD_DIR
         run: |
           mkdir -p out
-          # collect images and logs
-          find . -maxdepth 4 -type f \( -name "*.img" -o -name "*.img.gz" -o -name "*.img.xz" -o -name "*.img.zst" -o -name "build-run-*.log" -o -name "*.tar.xz" \) -exec cp -v {} out/ \; || true
+          # collect images and logs (safe YAML-compatible version)
+          find . -maxdepth 4 -type f -name "*.img" -exec cp -v {} out/ \; || true
+          find . -maxdepth 4 -type f -name "*.img.gz" -exec cp -v {} out/ \; || true
+          find . -maxdepth 4 -type f -name "*.img.xz" -exec cp -v {} out/ \; || true
+          find . -maxdepth 4 -type f -name "*.img.zst" -exec cp -v {} out/ \; || true
+          find . -maxdepth 4 -type f -name "build-run-*.log" -exec cp -v {} out/ \; || true
+          find . -maxdepth 4 -type f -name "*.tar.xz" -exec cp -v {} out/ \; || true
           ls -la out
 
       - name: Upload artifacts
