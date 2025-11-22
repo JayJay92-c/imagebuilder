@@ -1,83 +1,84 @@
-name: Build VelvetOS (kukui / kappa)
+name: Build Velvet Kukui
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  build_velvet:
+  build:
     runs-on: ubuntu-latest
     env:
       DEBIAN_FRONTEND: noninteractive
-      TARGET_BOARD: kukui
-      TARGET_VARIANT: kappa
-      BUILD_DIR: velvet_build
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static binfmt-support
+
+      - name: Prepare directories
+        run: |
+          mkdir -p build/rootfs
+          mkdir -p build/rootfs-min
+          mkdir -p build/image
+
+      - name: Create Debian rootfs
+        id: create_rootfs
+        run: |
+          set -e
+          if sudo debootstrap --arch=arm64 bookworm build/rootfs http://deb.debian.org/debian; then
+            echo "Rootfs created successfully."
+            echo "rootfs_status=success" >> $GITHUB_ENV
+          else
+            echo "Rootfs creation failed. Will use fallback."
+            echo "rootfs_status=fallback" >> $GITHUB_ENV
+          fi
+
+      - name: Configure chroot environment
+        if: env.rootfs_status == 'success'
+        run: |
+          sudo cp /usr/bin/qemu-aarch64-static build/rootfs/usr/bin/
+          sudo mount --bind /dev build/rootfs/dev
+          sudo mount --bind /sys build/rootfs/sys
+          sudo mount --bind /proc build/rootfs/proc
+
+      - name: Install additional packages in chroot
+        if: env.rootfs_status == 'success'
+        run: |
+          sudo chroot build/rootfs /bin/bash -c "apt-get update && apt-get install -y vim curl sudo"
+
+      # --- Fallback rootfs si falla ---
+      - name: Fallback: create minimal Debian rootfs
+        if: env.rootfs_status == 'fallback'
+        run: |
+          echo "Creating minimal fallback rootfs..."
+          sudo debootstrap --variant=minbase --arch=arm64 bookworm build/rootfs-min http://deb.debian.org/debian
+          echo "Fallback rootfs created successfully."
+
+      - name: Package rootfs into tarball
+        run: |
+          if [ -d build/rootfs ]; then
+            sudo tar -C build/rootfs -czf build/velvet-kukui-rootfs.tar.gz .
+          else
+            sudo tar -C build/rootfs-min -czf build/velvet-kukui-rootfs.tar.gz .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
         with:
-          fetch-depth: 0
-
-      - name: Install packages
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            qemu-user-static binfmt-support debootstrap \
-            build-essential git wget curl xz-utils \
-            python3 python3-pip rsync pv \
-            device-tree-compiler libssl-dev bc bison flex \
-            kmod e2fsprogs parted dosfstools gdisk squashfs-tools
-
-      - name: Prepare build dir
-        run: |
-          rm -rf $BUILD_DIR || true
-          mkdir -p $BUILD_DIR
-          cp -a . $BUILD_DIR
-          ls -la $BUILD_DIR
-
-      - name: Make known build scripts executable
-        run: |
-          chmod +x $BUILD_DIR/build-image.sh || true
-          chmod +x $BUILD_DIR/scripts/build-image.sh || true
-          chmod +x $BUILD_DIR/systems/chromebook_kukui/build-image.sh || true
-          chmod +x $BUILD_DIR/tests/build-image.sh || true
-
-      - name: Try repo's build-image scripts (in order)
-        working-directory: $BUILD_DIR
-        run: |
-          set -eux
-          ./build-image.sh ${TARGET_BOARD} ${TARGET_VARIANT} 2>&1 | tee build-run-1.log || true
-          if [ -x ./scripts/build-image.sh ]; then
-            ./scripts/build-image.sh ${TARGET_BOARD} ${TARGET_VARIANT} 2>&1 | tee build-run-2.log || true
-          fi
-          if [ -x ./systems/chromebook_kukui/build-image.sh ]; then
-            ./systems/chromebook_kukui/build-image.sh ${TARGET_VARIANT} 2>&1 | tee build-run-3.log || true
-          fi
-          if [ -x ./tests/build-image.sh ]; then
-            ./tests/build-image.sh ${TARGET_BOARD} ${TARGET_VARIANT} 2>&1 | tee build-run-4.log || true
-          fi
-
-      - name: Fallback: create minimal Debian rootfs (if image not produced)
-        if: ${{ always() }}
-        working-directory: $BUILD_DIR
-        run: |
-          set -eux
-          mkdir -p fallback
-          if ! ls *.img 1> /dev/null 2>&1; then
-            sudo debootstrap --arch=arm64 --variant=minbase bookworm rootfs http://deb.debian.org/debian || true
-            sudo tar -C rootfs -cJf fallback/velvet-rootfs-bookworm-arm64.tar.xz || true
-          fi
-          ls -la
-
-      - name: Collect artifacts
-        working-directory: $BUILD_DIR
-        run: |
-          mkdir -p out
-          find . -maxdepth 4 -type f \( -name "*.img" -o -name "*.img.gz" -o -name "*.img.xz" -o -name "*.img.zst" -o -name "build-run-*.log" -o -name "*.tar.xz" \) -exec cp -v {} out/ \; || true
-          ls -la out
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: velvet-kukui-build
-          path: out/
+          name: velvet-kukui-rootfs
+          path: build/velvet-kukui-rootfs.tar.gz
